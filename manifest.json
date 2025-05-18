@@ -1,0 +1,28 @@
+{
+  "manifest_version": 2,
+  "name": "Apple Music Rich Presence",
+  "version": "1.0",
+  "description": "Sync Apple Music to Discord Rich Presence using MediaSession API and fallback.",
+  "content_scripts": [
+    {
+      "matches": ["*://music.apple.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+ 
+  "permissions": [
+    "tabs",
+    "*://music.apple.com/*",
+  "http://localhost:3000/*",
+  "http://127.0.0.1:3000/*",
+  "activeTab"
+  ],
+  "applications": {
+    "gecko": {
+      "id": "nagulsenthilraja64@gmail.com",
+      "strict_min_version": "57.0"
+    }
+  }
+}
