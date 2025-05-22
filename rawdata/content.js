@@ -1,169 +1,180 @@
-// content.js
-
 /**
- * Content script for Apple Music Discord Rich Presence extension.
- * Uses Media Session API as primary source for song info.
- * Falls back to DOM queries to get song title, artist, current time, and duration.
- * Sends updates to local server for Discord RPC.
+ * Content script for Apple Music Discord Rich Presence
+ * Based on your working original code, adapted for background script communication
  */
- let lastSentState = { isPlaying: false, title: null };
 
- (() => {
-    // Server URL for local Discord RPC updater
-    const SERVER_URL = 'http://localhost:3000';
+(() => {
+  console.log('[Content] Apple Music RPC Content Script loaded');
   
-    // Interval time in ms for sending song info updates
-    const UPDATE_INTERVAL = 5000;
-  
-    // Flag for whether the server connection is confirmed
-    let serverAvailable = false;
-  
-    /**
-     * Checks if the local server is running by pinging /ping endpoint.
-     */
-    function checkServer() {
-      fetch(`${SERVER_URL}/ping`, {
-        method: 'GET',
-        mode: 'no-cors',
-      })
-        .then(() => {
-          serverAvailable = true;
-          console.log('[Content] Server connection established');
-        })
-        .catch(() => {
-          serverAvailable = false;
-          console.warn('[Content] Cannot connect to local server. Is it running?');
-        });
-    }
-  
-    /**
-     * Safely tries to get shadow DOM element with chaining.
-     * @param {Element} root - starting element
-     * @param {Array<string>} selectors - array of selectors or "shadowRoot" string
-     * @returns {Element|null}
-     */
-    function getShadowElement(root, selectors) {
-      let current = root;
-      for (const sel of selectors) {
-        if (!current) return null;
-        if (sel === 'shadowRoot') {
-          current = current.shadowRoot;
-        } else {
-          current = current.querySelector(sel);
-        }
+  // Check if we're on Apple Music
+  if (!window.location.href.includes('music.apple.com')) {
+    console.log('[Content] Not on Apple Music, exiting');
+    return;
+  }
+
+  const UPDATE_INTERVAL = 5000;
+  let lastSentData = null;
+  let serverAvailable = false;
+
+  /**
+   * Get song info using the EXACT same logic as your working old code
+   */
+  function getSongInfo() {
+    let isPlaying = false;
+    let title = null;
+    let artist = null;
+    let currentTime = 0;
+    let duration = 0;
+
+    console.log('[Content] Getting song info...');
+
+    // Try Media Session API first (same as your old code)
+    if (navigator.mediaSession && navigator.mediaSession.metadata) {
+      const metadata = navigator.mediaSession.metadata;
+      title = metadata.title || null;
+      artist = metadata.artist || null;
+      console.log('[Content] Media Session API found:', { title, artist });
+
+      // Check if any audio/video element is playing (same as your old code)
+      const mediaElements = [...document.querySelectorAll('audio, video')];
+      const playingMedia = mediaElements.find(
+        (media) => !media.paused && media.readyState > 2
+      );
+      if (playingMedia) {
+        isPlaying = true;
+        currentTime = playingMedia.currentTime || 0;
+        duration = playingMedia.duration || 0;
+        console.log('[Content] Found playing media:', { isPlaying, currentTime, duration });
       }
-      return current;
     }
-  
-    /**
-     * Gets song info primarily from Media Session API.
-     * Falls back to DOM queries to get title, artist, currentTime, duration.
-     * @returns {Object} song info with properties: isPlaying, title, artist, currentTime, duration
-     */
-    function getSongInfo() {
-      let isPlaying = false;
-      let title = null;
-      let artist = null;
-      let currentTime = 0;
-      let duration = 0;
-  
-      // Try Media Session API first
-      if (navigator.mediaSession && navigator.mediaSession.metadata) {
-        const metadata = navigator.mediaSession.metadata;
-        title = metadata.title || null;
-        artist = metadata.artist || null;
-  
-        // Unfortunately mediaSession API does not provide playback state directly
-        // We'll check if any audio/video element is playing
-        const mediaElements = [...document.querySelectorAll('audio, video')];
-        const playingMedia = mediaElements.find(
-          (media) => !media.paused && media.readyState > 2
-        );
-        if (playingMedia) {
+
+    // Fallback: Use DOM queries (EXACT same as your old code)
+    if (!title || !artist) {
+      console.log('[Content] Trying DOM fallback - looking for .lcd-meta-line__fragment');
+      
+      // This is the KEY selector from your working code
+      const fragments = document.querySelectorAll('.lcd-meta-line__fragment');
+      console.log('[Content] Found', fragments.length, 'fragments');
+      
+      if (fragments.length >= 2) {
+        title = fragments[0].textContent.trim();
+        artist = fragments[1].textContent.trim();
+        console.log('[Content] DOM fragments found - Title:', title, 'Artist:', artist);
+      } else if (fragments.length === 1) {
+        title = fragments[0].textContent.trim();
+        artist = 'Unknown Artist';
+        console.log('[Content] Only one fragment found - Title:', title);
+      }
+    }
+
+    // Fallback for playback state (same as your old code)
+    if (!isPlaying) {
+      console.log('[Content] Checking audio elements for playback state...');
+      const audios = document.querySelectorAll('audio');
+      for (const audio of audios) {
+        if (!audio.paused && audio.readyState > 2) {
           isPlaying = true;
-          currentTime = playingMedia.currentTime || 0;
-          duration = playingMedia.duration || 0;
+          currentTime = audio.currentTime || 0;
+          duration = audio.duration || 0;
+          console.log('[Content] Found playing audio element');
+          break;
         }
       }
-  
-      // Fallback: if no media session info or missing title/artist, try DOM queries
-      if (!title || !artist) {
-        // Query Apple Music specific metadata fragments if available
-        const fragments = document.querySelectorAll('.lcd-meta-line__fragment');
-        if (fragments.length >= 2) {
-          title = fragments[0].textContent.trim();
-          artist = fragments[1].textContent.trim();
-        } else if (fragments.length === 1) {
-          title = fragments[0].textContent.trim();
-          artist = 'Unknown Artist';
-        }
-      }
-  
-      // Fallback for playback state and timing if not set
-      if (!isPlaying) {
-        // Look for any playing audio elements
-        const audios = document.querySelectorAll('audio');
-        for (const audio of audios) {
-          if (!audio.paused && audio.readyState > 2) {
-            isPlaying = true;
-            currentTime = audio.currentTime || 0;
-            duration = audio.duration || 0;
-            break;
-          }
-        }
-      }
-  
-      return {
-        isPlaying,
-        title: title || 'Unknown Song',
-        artist: artist || 'Unknown Artist',
-        currentTime,
-        duration,
-      };
     }
-  
-    /**
-     * Sends the current song info to the local Discord RPC server.
-     * @param {Object} songInfo 
-     */
-    function sendSongInfo(songInfo) {
-      if (!serverAvailable) {
-        console.warn('[Content] Server not available. Skipping send.');
-        return;
-      }
-  
-      fetch(`${SERVER_URL}/update`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(songInfo),
-        mode: 'no-cors',
-      }).catch((err) => {
-        console.error('[Content] Failed to send update:', err);
-        serverAvailable = false; // mark server as down to retry later
+
+    const result = {
+      isPlaying,
+      title: title || 'Unknown Song',
+      artist: artist || 'Unknown Artist',
+      currentTime: Math.floor(currentTime),
+      duration: Math.floor(duration),
+    };
+
+    console.log('[Content] Final song info:', result);
+    return result;
+  }
+
+  /**
+   * Check server via background script
+   */
+  async function checkServer() {
+    try {
+      console.log('[Content] Checking server via background script...');
+      const response = await chrome.runtime.sendMessage({ type: 'PING_SERVER' });
+      serverAvailable = response && response.success;
+      console.log('[Content] Server check result:', serverAvailable);
+    } catch (error) {
+      console.error('[Content] Server check failed:', error);
+      serverAvailable = false;
+    }
+  }
+
+  /**
+   * Send song info via background script
+   */
+  async function sendSongInfo(songInfo) {
+    if (!serverAvailable) {
+      console.warn('[Content] Server not available, skipping send');
+      return;
+    }
+
+    try {
+      console.log('[Content] Sending song info via background script:', songInfo);
+      const response = await chrome.runtime.sendMessage({
+        type: 'UPDATE_PRESENCE',
+        data: songInfo
       });
+
+      if (response && response.success) {
+        console.log('[Content] Successfully sent update');
+        lastSentData = songInfo;
+      } else {
+        console.error('[Content] Failed to send update:', response);
+        serverAvailable = false;
+      }
+    } catch (error) {
+      console.error('[Content] Error sending update:', error);
+      serverAvailable = false;
     }
-  
-    // Initial server check
-    checkServer();
-  
-    // Periodic update every 5 seconds
-    setInterval(() => {
+  }
+
+  /**
+   * Main update function (same logic as your old code)
+   */
+  async function updateLoop() {
+    // Check server if not available
+    if (!serverAvailable) {
+      await checkServer();
       if (!serverAvailable) {
-        checkServer();
+        console.log('[Content] Server still not available, skipping update');
         return;
-        
       }
-  
-      const songInfo = getSongInfo();
-  
-      if (songInfo.isPlaying) {
-        console.log('[Content] Sending song info:', songInfo);
-        sendSongInfo(songInfo);
-      }
-    }, UPDATE_INTERVAL);
-  
-    console.log('[Content] Content script loaded');
-  })();
-  
+    }
+
+    const songInfo = getSongInfo();
+
+    // Only send if song is playing (same as your old code condition)
+    if (songInfo.isPlaying) {
+      console.log('[Content] Song is playing, sending update');
+      await sendSongInfo(songInfo);
+    } else {
+      console.log('[Content] No song playing, skipping update');
+    }
+  }
+
+  // Initialize (same as your old code)
+  async function init() {
+    console.log('[Content] Initializing...');
+    
+    // Initial server check
+    await checkServer();
+    
+    // Start periodic updates (same interval as your old code)
+    setInterval(updateLoop, UPDATE_INTERVAL);
+    
+    console.log('[Content] Initialization complete - checking every', UPDATE_INTERVAL, 'ms');
+  }
+
+  // Start initialization
+  init();
+})();
